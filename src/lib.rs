@@ -26,6 +26,8 @@ pub enum VorbisError {
     BadHeader,
     InitialFileHeadersCorrupt,
     Hole,
+    CommentFormat,
+    CommentEncoding(std::string::FromUtf8Error),
 }
 
 impl std::error::Error for VorbisError {
@@ -37,13 +39,16 @@ impl std::error::Error for VorbisError {
             &VorbisError::BadHeader => "Invalid Vorbis bitstream header",
             &VorbisError::InitialFileHeadersCorrupt => "Initial file headers are corrupt",
             &VorbisError::Hole => "Interruption of data",
+            &VorbisError::CommentEncoding(_) => "Invalid Vorbis comment encoding",
+            &VorbisError::CommentFormat => "Invalid Vorbis comment format",
         }
     }
 
     fn cause(&self) -> Option<&std::error::Error> {
         match self {
             &VorbisError::ReadError(ref err) => Some(err as &std::error::Error),
-            _ => None
+            &VorbisError::CommentEncoding(ref err) => Some(err as &std::error::Error),
+            _ => None,
         }
     }
 }
@@ -60,7 +65,15 @@ impl From<io::Error> for VorbisError {
     }
 }
 
-struct DecoderData<R> where R: Read + Seek {
+impl From<std::string::FromUtf8Error> for VorbisError {
+    fn from(err: std::string::FromUtf8Error) -> VorbisError {
+        VorbisError::CommentEncoding(err)
+    }
+}
+
+struct DecoderData<R>
+    where R: Read + Seek
+{
     vorbis: vorbisfile_sys::OggVorbis_File,
     reader: R,
     current_logical_bitstream: libc::c_int,
@@ -188,6 +201,41 @@ impl<R> Decoder<R> where R: Read + Seek {
 
     pub fn into_packets(self) -> PacketsIntoIter<R> {
         PacketsIntoIter(self)
+    }
+
+    pub fn vendor(&self) -> Result<String, VorbisError> {
+        let vendor_buf = unsafe {
+            let vc = &*self.data.vorbis.vc;
+            std::ffi::CStr::from_ptr(vc.vendor).to_bytes()
+        };
+        Ok(try!(String::from_utf8(vendor_buf.to_vec())))
+    }
+
+    pub fn comments(&self) -> Box<Iterator<Item = Result<(String, String), VorbisError>>> {
+
+        fn entry(bytes: &[u8]) -> Result<(String, String), VorbisError> {
+            let mut key_value = bytes.splitn(2, |c| *c == '=' as u8);
+            match (key_value.next(), key_value.next()) {
+                (Some(key), Some(value)) => {
+                    Ok((try!(String::from_utf8(key.to_vec())),
+                        try!(String::from_utf8(value.to_vec()))))
+                }
+                _ => Err(VorbisError::CommentFormat),
+            }
+        }
+
+        let vc = unsafe { &*self.data.vorbis.vc };
+        let mut result: Vec<Result<(String, String), VorbisError>> =
+            Vec::with_capacity(vc.comments as usize);
+        for i in 0..vc.comments as isize {
+            let length = unsafe { *vc.comment_lengths.offset(i) };
+            let comment_buf = unsafe {
+                let comment_ptr = *vc.user_comments.offset(i);
+                std::slice::from_raw_parts(comment_ptr as *const u8, length as usize)
+            };
+            result.push(entry(comment_buf));
+        }
+        Box::new(result.into_iter())
     }
 
     fn next_packet(&mut self) -> Option<Result<Packet, VorbisError>> {
