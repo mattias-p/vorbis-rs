@@ -293,25 +293,6 @@ impl<R> Decoder<R> where R: Read + Seek
         }
     }
 
-    pub fn fold_comments<F, T>(&self, mut acc: T, f: F) -> T
-        where F: Fn(T, &Comment) -> T
-    {
-        let vc = unsafe { &*self.data.vorbis.vc };
-        for i in 0..vc.comments as isize {
-            let length = unsafe { *vc.comment_lengths.offset(i) };
-            let comment_buf = unsafe {
-                let comment_ptr = *vc.user_comments.offset(i);
-                std::slice::from_raw_parts(comment_ptr as *const u8, length as usize)
-            };
-            let comment = Comment {
-                bytes: &comment_buf,
-                sep_pos: comment_buf.iter().position(|&b| b == '=' as u8),
-            };
-            acc = f(acc, &comment);
-        }
-        acc
-    }
-
     pub fn comments(&self) -> CommentsIter<R> {
         CommentsIter {
             decoder: self,
