@@ -125,10 +125,6 @@ impl<'a> Comment<'a> {
             .map(|sep_pos| &self.bytes[sep_pos + 1..])
     }
 
-    pub fn has_key(&self, key: &[u8]) -> Result<bool, VorbisError> {
-        self.key_bytes().map(|key0| key0 == key)
-    }
-
     pub fn key(&self) -> Result<String, VorbisError> {
         self.key_bytes().and_then(|key0| {
             if key0.iter().any(|&b| b < 0x20 || b > 0x7D || b == 0x3D) {
@@ -329,7 +325,7 @@ impl<R> Decoder<R> where R: Read + Seek
         let key_bytes = key.as_bytes();
         let mut values = vec![];
         for comment in self.comments() {
-            if try!(comment.has_key(key_bytes)) {
+            if try!(comment.key_bytes()) == key_bytes {
                 values.push(try!(comment.value()));
             }
         }
