@@ -50,16 +50,16 @@ fn warn(message: &str) {
     writeln!(&mut std::io::stderr(), "Warning: {}", message).unwrap();
 }
 
-fn get_splice<R>(decoder: &vorbis::Decoder<R>) -> Result<Option<u64>, MyError>
+fn get_splicepoint<R>(decoder: &vorbis::Decoder<R>) -> Result<Option<u64>, MyError>
     where R: Read + Seek
 {
-    let values: Vec<String> = try!(decoder.get_comment("SPLICEPOINT"));
-    values.iter().fold(Ok(None), |acc, value| {
-        let acc = acc.unwrap();
-        let value: u64 = try!(value.parse::<u64>());
-        let min = acc.map_or(value, |acc_value| std::cmp::min(acc_value, value));
-        Ok(Some(min))
-    })
+    let mut min = None;
+    for value in try!(decoder.get_comment("SPLICEPOINT")) {
+        let value: u64 = try!(value.parse());
+        min = min.map_or(Some(value),
+                         |min_value| Some(std::cmp::min(min_value, value)));
+    }
+    Ok(min)
 }
 
 fn main() {
@@ -78,7 +78,7 @@ fn main() {
     let decoder = vorbis::Decoder::new(file).unwrap();
     println!("{}", decoder.vendor().expect("vendor"));
 
-    let splice = get_splice(&decoder);
+    let splice = get_splicepoint(&decoder);
 
     if let Some(splice) = splice.expect("SPLICEPOINT") {
         println!("SPLICEPOINT: {}", splice);
