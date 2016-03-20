@@ -107,10 +107,12 @@ pub struct Comment<'a> {
 }
 
 impl<'a> Comment<'a> {
-    pub fn bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.bytes.len());
-        bytes.clone_from_slice(self.bytes);
-        bytes
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes
+    }
+
+    pub fn has_separator(&self) -> bool {
+        self.sep_pos.is_some()
     }
 
     pub fn key_bytes(&self) -> Result<&[u8], VorbisError> {
