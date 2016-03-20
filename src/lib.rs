@@ -101,6 +101,49 @@ pub struct Packet {
     pub bitrate_window: u64,
 }
 
+pub struct Comment<'a> {
+    bytes: &'a [u8],
+    sep_pos: Option<usize>,
+}
+
+impl<'a> Comment<'a> {
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.bytes.len());
+        bytes.clone_from_slice(self.bytes);
+        bytes
+    }
+
+    pub fn key_bytes(&self) -> Result<&[u8], VorbisError> {
+        self.sep_pos
+            .ok_or(VorbisError::CommentFormat)
+            .map(|sep_pos| &self.bytes[..sep_pos])
+    }
+
+    pub fn value_bytes(&self) -> Result<&[u8], VorbisError> {
+        self.sep_pos
+            .ok_or(VorbisError::CommentFormat)
+            .map(|sep_pos| &self.bytes[sep_pos + 1..])
+    }
+
+    pub fn has_key(&self, key: &[u8]) -> Result<bool, VorbisError> {
+        self.key_bytes().map(|key0| key0 == key)
+    }
+
+    pub fn key(&self) -> Result<String, VorbisError> {
+        self.key_bytes().and_then(|key0| {
+            if key0.iter().any(|&b| b < 0x20 || b > 0x7D || b == 0x3D) {
+                Err(VorbisError::CommentFormat)
+            } else {
+                Ok(String::from_utf8(key0.to_vec()).unwrap())
+            }
+        })
+    }
+    pub fn value(&self) -> Result<String, VorbisError> {
+        self.value_bytes()
+            .and_then(|value0| Ok(try!(String::from_utf8(value0.to_vec()))))
+    }
+}
+
 impl<R> Decoder<R> where R: Read + Seek
 {
     pub fn new(input: R) -> Result<Decoder<R>, VorbisError> {
@@ -217,49 +260,38 @@ impl<R> Decoder<R> where R: Read + Seek
         Ok(try!(String::from_utf8(vendor_buf.to_vec())))
     }
 
-    pub fn comments(&self) -> Box<Iterator<Item = Result<(String, String), VorbisError>>> {
-
-        fn entry(bytes: &[u8]) -> Result<(String, String), VorbisError> {
-            let mut key_value = bytes.splitn(2, |c| *c == '=' as u8);
-            match (key_value.next(), key_value.next()) {
-                (Some(key), Some(value)) => {
-                    if key.iter().any(|&b| b < 0x20 || b > 0x7D || b == 0x3D) {
-                        Err(VorbisError::CommentFormat)
-                    } else {
-                        let value = try!(String::from_utf8(value.to_vec()));
-                        let key = String::from_utf8(key.to_vec()).unwrap();
-                        Ok((key, value))
-                    }
-                }
-                _ => Err(VorbisError::CommentFormat),
-            }
-        }
-
+    pub fn fold_comments<F, T>(&self, mut acc: T, f: F) -> T
+        where F: Fn(T, &Comment) -> T
+    {
         let vc = unsafe { &*self.data.vorbis.vc };
-        let mut result: Vec<Result<(String, String), VorbisError>> =
-            Vec::with_capacity(vc.comments as usize);
         for i in 0..vc.comments as isize {
             let length = unsafe { *vc.comment_lengths.offset(i) };
             let comment_buf = unsafe {
                 let comment_ptr = *vc.user_comments.offset(i);
                 std::slice::from_raw_parts(comment_ptr as *const u8, length as usize)
             };
-            result.push(entry(comment_buf));
+            let comment = Comment {
+                bytes: &comment_buf,
+                sep_pos: comment_buf.iter().position(|&b| b == '=' as u8),
+            };
+            acc = f(acc, &comment);
         }
-        Box::new(result.into_iter())
+        acc
     }
 
     pub fn get_comment(&self, key: &str) -> Result<Vec<String>, VorbisError>
         where R: Read + Seek
     {
-        let mut values = Vec::new();
-        for item in self.comments() {
-            let (item_key, item_value) = try!(item);
-            if item_key == key {
-                values.push(item_value);
+        let key_bytes = key.as_bytes();
+        let values: Result<_, VorbisError> = Ok(vec![]);
+        self.fold_comments(values, |mut acc, comment| {
+            if let Ok(ref mut acc) = acc {
+                if try!(comment.has_key(key_bytes)) {
+                    acc.push(try!(comment.value()));
+                }
             }
-        }
-        Ok(values)
+            acc
+        })
     }
 
     fn next_packet(&mut self) -> Option<Result<Packet, VorbisError>> {
