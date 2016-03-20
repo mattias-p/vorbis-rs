@@ -29,7 +29,7 @@ pub enum VorbisError {
     InitialFileHeadersCorrupt,
     Hole,
     CommentFormat,
-    CommentEncoding(std::string::FromUtf8Error),
+    CommentCharacter(std::string::FromUtf8Error),
 }
 
 impl std::error::Error for VorbisError {
@@ -41,7 +41,7 @@ impl std::error::Error for VorbisError {
             &VorbisError::BadHeader => "Invalid Vorbis bitstream header",
             &VorbisError::InitialFileHeadersCorrupt => "Initial file headers are corrupt",
             &VorbisError::Hole => "Interruption of data",
-            &VorbisError::CommentEncoding(_) => "Invalid Vorbis comment encoding",
+            &VorbisError::CommentCharacter(_) => "Invalid Vorbis comment character encoding",
             &VorbisError::CommentFormat => "Invalid Vorbis comment format",
         }
     }
@@ -49,7 +49,7 @@ impl std::error::Error for VorbisError {
     fn cause(&self) -> Option<&std::error::Error> {
         match self {
             &VorbisError::ReadError(ref err) => Some(err as &std::error::Error),
-            &VorbisError::CommentEncoding(ref err) => Some(err as &std::error::Error),
+            &VorbisError::CommentCharacter(ref err) => Some(err as &std::error::Error),
             _ => None,
         }
     }
@@ -69,7 +69,7 @@ impl From<io::Error> for VorbisError {
 
 impl From<std::string::FromUtf8Error> for VorbisError {
     fn from(err: std::string::FromUtf8Error) -> VorbisError {
-        VorbisError::CommentEncoding(err)
+        VorbisError::CommentCharacter(err)
     }
 }
 
@@ -223,8 +223,13 @@ impl<R> Decoder<R> where R: Read + Seek
             let mut key_value = bytes.splitn(2, |c| *c == '=' as u8);
             match (key_value.next(), key_value.next()) {
                 (Some(key), Some(value)) => {
-                    Ok((try!(String::from_utf8(key.to_vec())),
-                        try!(String::from_utf8(value.to_vec()))))
+                    if key.iter().any(|&b| b < 0x20 || b > 0x7D || b == 0x3D) {
+                        Err(VorbisError::CommentFormat)
+                    } else {
+                        let value = try!(String::from_utf8(value.to_vec()));
+                        let key = String::from_utf8(key.to_vec()).unwrap();
+                        Ok((key, value))
+                    }
                 }
                 _ => Err(VorbisError::CommentFormat),
             }
