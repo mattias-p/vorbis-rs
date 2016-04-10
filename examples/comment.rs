@@ -1,4 +1,3 @@
-extern crate vorbis_sys;
 extern crate vorbis;
 
 use std::error;
